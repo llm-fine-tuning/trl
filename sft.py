@@ -1,77 +1,112 @@
+"""
+# Full training
+python trl/scripts/sft.py \
+    --model_name_or_path Qwen/Qwen2-0.5B \
+    --dataset_name trl-lib/Capybara \
+    --learning_rate 2.0e-5 \
+    --num_train_epochs 1 \
+    --packing \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 8 \
+    --gradient_checkpointing \
+    --logging_steps 25 \
+    --eval_strategy steps \
+    --eval_steps 100 \
+    --output_dir Qwen2-0.5B-SFT \
+    --push_to_hub
+
+# LoRA
+python trl/scripts/sft.py \
+    --model_name_or_path Qwen/Qwen2-0.5B \
+    --dataset_name trl-lib/Capybara \
+    --learning_rate 2.0e-4 \
+    --num_train_epochs 1 \
+    --packing \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 8 \
+    --gradient_checkpointing \
+    --logging_steps 25 \
+    --eval_strategy steps \
+    --eval_steps 100 \
+    --use_peft \
+    --lora_r 32 \
+    --lora_alpha 16 \
+    --output_dir Qwen2-0.5B-SFT \
+    --push_to_hub
+"""
+
+import argparse
+
 from datasets import load_dataset
 from transformers import AutoTokenizer
+
 from trl import (
-    ModelConfig,          # 모델 설정을 관리하는 클래스
-    ScriptArguments,      # 스크립트 실행 인자를 관리하는 클래스
-    SFTConfig,           # Supervised Fine-Tuning 설정 클래스
-    SFTTrainer,          # Supervised Fine-Tuning 트레이너
-    TrlParser,           # 커맨드라인 인자 파서
-    get_kbit_device_map, # 8비트/4비트 양자화를 위한 디바이스 매핑
-    get_peft_config,     # PEFT(Parameter-Efficient Fine-Tuning) 설정
-    get_quantization_config, # 모델 양자화 설정
+    ModelConfig,
+    ScriptArguments,
+    SFTConfig,
+    SFTTrainer,
+    TrlParser,
+    get_kbit_device_map,
+    get_peft_config,
+    get_quantization_config,
 )
 
-if __name__ == "__main__":
-    # 1. 커맨드라인 인자 파싱 및 설정
-    parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig))
-    script_args, training_args, model_config = parser.parse_args_and_config()
 
+def main(script_args, training_args, model_args):
     ################
-    # 2. 모델 초기화 설정 및 토크나이저
+    # Model init kwargs & Tokenizer
     ################
-    # 양자화 설정 가져오기 (8비트/4비트 등)
-    quantization_config = get_quantization_config(model_config)
-    
-    # 모델 로드를 위한 기본 설정
+    quantization_config = get_quantization_config(model_args)
     model_kwargs = dict(
-        revision=model_config.model_revision,              # 모델 리비전(버전)
-        trust_remote_code=model_config.trust_remote_code, # 원격 코드 신뢰 여부
-        attn_implementation=model_config.attn_implementation,  # 어텐션 구현 방식
-        torch_dtype=model_config.torch_dtype,             # 텐서 데이터 타입
-        # 그래디언트 체크포인팅 사용 시 캐시 비활성화
+        revision=model_args.model_revision,
+        trust_remote_code=model_args.trust_remote_code,
+        attn_implementation=model_args.attn_implementation,
+        torch_dtype=model_args.torch_dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
-        # 양자화 사용 시 디바이스 매핑 설정
         device_map=get_kbit_device_map() if quantization_config is not None else None,
-        quantization_config=quantization_config,          # 양자화 설정
+        quantization_config=quantization_config,
     )
-    
-    # 학습 인자에 모델 초기화 설정 추가
     training_args.model_init_kwargs = model_kwargs
-    
-    # 토크나이저 초기화
     tokenizer = AutoTokenizer.from_pretrained(
-        model_config.model_name_or_path,
-        trust_remote_code=model_config.trust_remote_code,
-        use_fast=True  # 빠른 토크나이저 사용
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, use_fast=True
     )
-    # pad_token이 없는 경우 eos_token을 pad_token으로 사용
     tokenizer.pad_token = tokenizer.eos_token
 
     ################
-    # 3. 데이터셋 로드
+    # Dataset
     ################
-    dataset = load_dataset(script_args.dataset_name)
+    dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
 
     ################
-    # 4. 학습 설정 및 실행
+    # Training
     ################
     trainer = SFTTrainer(
-        # 모델은 경로만 지정 (SFTTrainer가 내부적으로 로드)
-        model=model_config.model_name_or_path,
-        args=training_args,              # 학습 관련 설정
-        train_dataset=dataset[script_args.dataset_train_split],  # 학습 데이터
-        # 평가 데이터 (eval_strategy가 'no'가 아닐 때만)
+        model=model_args.model_name_or_path,
+        args=training_args,
+        train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
-        processing_class=tokenizer,      # 토크나이저
-        peft_config=get_peft_config(model_config),  # PEFT 설정 (LoRA 등)
+        processing_class=tokenizer,
+        peft_config=get_peft_config(model_args),
     )
-    
-    # 학습 실행
+
     trainer.train()
-    
-    # 모델 저장
+
+    # Save and push to hub
     trainer.save_model(training_args.output_dir)
-    
-    # Hugging Face Hub에 모델 업로드 (설정된 경우)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
+
+
+def make_parser(subparsers: argparse._SubParsersAction = None):
+    dataclass_types = (ScriptArguments, SFTConfig, ModelConfig)
+    if subparsers is not None:
+        parser = subparsers.add_parser("sft", help="Run the SFT training script", dataclass_types=dataclass_types)
+    else:
+        parser = TrlParser(dataclass_types)
+    return parser
+
+
+if __name__ == "__main__":
+    parser = make_parser()
+    script_args, training_args, model_args = parser.parse_args_and_config()
+    main(script_args, training_args, model_args)
