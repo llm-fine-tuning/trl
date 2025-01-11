@@ -1,4 +1,20 @@
 '''
+%pip install -q tensorboard wandb 
+ 
+%pip install -q --upgrade \
+  "transformers==4.45.1" \
+  "datasets==3.0.1" \
+  "accelerate==0.34.2" \
+  "evaluate==0.4.3" \
+  "bitsandbytes==0.44.0" \
+  "trl==0.11.1" \
+  "peft==0.13.0" \
+  "qwen-vl-utils"
+
+%pip install pillow==9.4.0
+'''
+
+'''
 # 단일 GPU 실행
 python sft_vlm_qwen2_vl.py \
     --model_name_or_path "Qwen/Qwen2-VL-7B-Instruct" \
@@ -184,15 +200,31 @@ if __name__ == "__main__":
            }
 
    try:
-       dataset = load_dataset("daje/Ko-ScienceQA", split="train")
-       dataset = dataset.filter(lambda example: example["image"] is not None)
-       dataset = dataset.map(format_data)
+        # 학습 데이터와 테스트 데이터를 분리
+        dataset = load_dataset("daje/Ko-ScienceQA", split="train")
+        dataset = dataset.filter(lambda example: example["image"] is not None)
+        dataset = dataset.map(format_data, batched=True, batch_size=1000)
 
-       train_size = int(len(dataset) * dataset_train_ratio)
-       test_size = len(dataset) - train_size
-       train_dataset, test_dataset = dataset.train_test_split(
-           train_size=train_size, test_size=test_size, shuffle=True
-       ).values()
+        train_size = int(len(dataset) * dataset_train_ratio)
+        test_size = len(dataset) - train_size
+        train_dataset, test_dataset = dataset.train_test_split(
+            train_size=train_size, test_size=test_size, shuffle=True
+        ).values()
+
+        # 학습 데이터 예시 로깅
+        logger.info("\n" + "="*50)
+        logger.info("데이터셋 예시:")
+        sample_idx = 0  # 첫 번째 예시 사용
+        sample = train_dataset[sample_idx]
+        
+        # collate_fn과 동일한 방식으로 템플릿 적용
+        formatted_text = processor.apply_chat_template(sample["messages"], tokenize=False)
+        image_input = process_vision_info(sample["messages"])[0]
+        
+        logger.info("\nFormatted Text (after chat template):")
+        logger.info(formatted_text)
+        logger.info("\nImage is present: " + str(image_input is not None))
+        logger.info("="*50 + "\n")
    except Exception as e:
        logger.error(f"데이터셋 로드 중 오류 발생: {e}")
        raise
