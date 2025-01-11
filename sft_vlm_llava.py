@@ -3,7 +3,7 @@ pip install pillow
 
 accelerate launch
     --config_file=deepspeed_zero3.yaml \
-    examples/scripts/sft_vlm.py \
+    sft_vlm_llava.py \
     --dataset_name HuggingFaceH4/llava-instruct-mix-vsft \
     --model_name_or_path llava-hf/llava-1.5-7b-hf \
     --per_device_train_batch_size 8 \
