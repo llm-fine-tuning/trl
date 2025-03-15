@@ -4,7 +4,8 @@
 import os
 import torch
 from datasets import load_dataset, Dataset, load_from_disk
-from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer, TrainingArguments
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from trl import SFTTrainer, SFTConfig
 
 # 만약 max_seq_length가 전역 변수라면 정의
 max_seq_length = 1024  # 환경에 맞게 수정
@@ -86,7 +87,6 @@ if os.path.exists("train_dataset"):
     train_dataset = load_from_disk("train_dataset")
     print("로컬 train_dataset 로드 완료.")
 else:
-    # 리스트 형태에서 다시 Dataset 객체로 변경
     train_dataset = Dataset.from_list(train_dataset_list)
     train_dataset.save_to_disk("train_dataset")
     print("train_dataset을 로컬에 저장함.")
@@ -95,7 +95,6 @@ if os.path.exists("test_dataset"):
     test_dataset = load_from_disk("test_dataset")
     print("로컬 test_dataset 로드 완료.")
 else:
-    # 리스트 형태에서 다시 Dataset 객체로 변경
     test_dataset = Dataset.from_list(test_dataset_list)
     test_dataset.save_to_disk("test_dataset")
     print("test_dataset을 로컬에 저장함.")
@@ -106,7 +105,6 @@ model_id = "Qwen/Qwen2-7B-Instruct"
 # Load model and tokenizer
 model = AutoModelForCausalLM.from_pretrained(
     model_id,
-    # device_map="auto", DeepSpeed로 멀티 GPU 학습 시 Accelerate나 DeepSpeed가 직접 모델의 분산 배치를 관리하도록 해야하므로 주석 처리
     torch_dtype=torch.bfloat16,
 )
 tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -117,25 +115,27 @@ text = tokenizer.apply_chat_template(
 )
 print("템플릿 적용 결과:", text)
 
-# ----- 풀 파인튜닝을 위한 Trainer 설정 (TRL, LoRA 관련 코드는 제거됨) -----
-training_args = TrainingArguments(
-    output_dir="qwen2-7b-full-finetune",  # 저장될 디렉토리
-    num_train_epochs=3,                     # 에포크 수
-    per_device_train_batch_size=2,          # GPU 당 배치 크기
-    gradient_accumulation_steps=4,          # 그래디언트 누적 스텝
-    gradient_checkpointing=True,            # 메모리 절약 체크포인팅
-    optim="adamw_torch_fused",              # 최적화기
-    logging_steps=10,                       # 로그 주기
-    save_strategy="steps",                  # 저장 전략
-    save_steps=50,                          # 저장 주기
-    bf16=True,                              # bfloat16 사용
-    learning_rate=1e-4,                     # 학습률
-    max_grad_norm=0.3,                      # 그래디언트 클리핑
-    warmup_ratio=0.03,                      # 워밍업 비율
-    lr_scheduler_type="constant",           # 학습률 스케줄러 타입
-    push_to_hub=False,                      # 허브 업로드 여부
+# SFTTrainer 설정 (풀 파인튜닝을 위해 peft_config 제거)
+args = SFTConfig(
+    output_dir="qwen2-7b-full-sft",  # 저장될 디렉토리 및 저장소 ID
+    num_train_epochs=3,               # 에포크 수
+    per_device_train_batch_size=2,    # GPU 당 배치 크기
+    gradient_accumulation_steps=4,    # 그래디언트 누적 스텝
+    gradient_checkpointing=True,      # 메모리 절약 체크포인팅
+    optim="adamw_torch_fused",        # 최적화기
+    logging_steps=10,                 # 로그 주기
+    save_strategy="steps",            # 저장 전략
+    save_steps=50,                    # 저장 주기
+    bf16=True,                        # bfloat16 사용
+    learning_rate=1e-4,               # 학습률
+    max_grad_norm=0.3,                # 그래디언트 클리핑
+    warmup_ratio=0.03,                # 워밍업 비율
+    lr_scheduler_type="constant",     # 학습률 스케줄러 타입
+    push_to_hub=False,                # 허브 업로드 여부
     remove_unused_columns=False,
-    deepspeed="ds_config.json"              # DeepSpeed 설정 파일 지정
+    dataset_kwargs={"skip_prepare_dataset": True},
+    report_to=None,
+    deepspeed="ds_config.json"        # DeepSpeed 설정 파일 지정
 )
 
 def collate_fn(batch):
@@ -214,15 +214,16 @@ def collate_fn(batch):
     return new_batch
 
 def main():
-    trainer = Trainer(
+    trainer = SFTTrainer(
         model=model,
-        args=training_args,
+        args=args,
+        max_seq_length=max_seq_length,
         train_dataset=train_dataset,
-        eval_dataset=test_dataset,
         data_collator=collate_fn,
+        # peft_config 제거: 전체 모델 파라미터 업데이트 (풀 파인튜닝)
     )
     
-    # 학습 시작 (모델은 자동으로 output_dir에 저장됨)
+    # 학습 시작
     trainer.train()
     # 모델 저장 (최종 모델)
     trainer.save_model()
