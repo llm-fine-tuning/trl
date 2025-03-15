@@ -1,4 +1,4 @@
-# pip install torch==2.4.0 transformers==4.45.1 datasets==3.0.1 accelerate==0.34.2 trl==0.11.1 peft==0.13.0 deepspeed
+# pip install torch==2.4.0 transformers==4.45.1 datasets==3.0.1 accelerate==0.34.2 trl==0.11.1 peft==0.13.0 deepspeed==0.15.4
 # train.py
 
 import os
