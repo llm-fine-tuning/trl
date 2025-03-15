@@ -96,7 +96,7 @@ model_id = "Qwen/Qwen2-7B-Instruct"
 # Load model and tokenizer
 model = AutoModelForCausalLM.from_pretrained(
     model_id,
-    device_map="auto",
+    # device_map="auto", DeepSpeed로 멀티 GPU 학습을 할 때는 Accelerate나 DeepSpeed가 직접 모델의 분산 배치를 관리하도록 해야하므로 해당 코드를 주석 처리할 것.
     torch_dtype=torch.bfloat16,
 )
 tokenizer = AutoTokenizer.from_pretrained(model_id)
