@@ -3,9 +3,10 @@
 
 import os
 import torch
-from datasets import load_dataset, Dataset
+from datasets import load_dataset, Dataset, load_from_disk
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from trl import SFTTrainer, SFTConfig, LoraConfig
+from trl import SFTTrainer, SFTConfig
+from peft import LoraConfig
 
 # 만약 max_seq_length가 전역 변수라면 정의
 max_seq_length = 1024  # 환경에 맞게 수정
@@ -34,7 +35,7 @@ for type_name in set(dataset['type']):
     print(f"{type_name}: {dataset['type'].count(type_name)}")
 
 # 4. train/test 분할 비율 설정 (0.5면 5:5로 분할)
-test_ratio = 0.8
+test_ratio = 0.5
 
 train_data = []
 test_data = []
@@ -67,10 +68,10 @@ def format_data(sample):
     }
 
 # 7. 분할된 데이터를 OpenAI format으로 변환
-train_dataset = [format_data(dataset[i]) for i in train_data]
-test_dataset = [format_data(dataset[i]) for i in test_data]
+train_dataset_list = [format_data(dataset[i]) for i in train_data]
+test_dataset_list = [format_data(dataset[i]) for i in test_data]
 
-print(f"\n전체 데이터 분할 결과: Train {len(train_dataset)}개, Test {len(test_dataset)}개")
+print(f"\n전체 데이터 분할 결과: Train {len(train_dataset_list)}개, Test {len(test_dataset_list)}개")
 
 print("\n학습 데이터의 type 분포:")
 for type_name in set(dataset['type']):
@@ -82,13 +83,24 @@ for type_name in set(dataset['type']):
     count = sum(1 for i in test_data if dataset[i]['type'] == type_name)
     print(f"{type_name}: {count}")
 
-# 리스트 형태에서 다시 Dataset 객체로 변경
-print("변경 전 train_dataset 타입:", type(train_dataset))
-print("변경 전 test_dataset 타입:", type(test_dataset))
-train_dataset = Dataset.from_list(train_dataset)
-test_dataset = Dataset.from_list(test_dataset)
-print("변경 후 train_dataset 타입:", type(train_dataset))
-print("변경 후 test_dataset 타입:", type(test_dataset))
+# 로컬에 저장된 데이터셋이 있으면 불러오고, 없으면 새로 변환 후 저장
+if os.path.exists("train_dataset"):
+    train_dataset = load_from_disk("train_dataset")
+    print("로컬 train_dataset 로드 완료.")
+else:
+    # 리스트 형태에서 다시 Dataset 객체로 변경
+    train_dataset = Dataset.from_list(train_dataset_list)
+    train_dataset.save_to_disk("train_dataset")
+    print("train_dataset을 로컬에 저장함.")
+
+if os.path.exists("test_dataset"):
+    test_dataset = load_from_disk("test_dataset")
+    print("로컬 test_dataset 로드 완료.")
+else:
+    # 리스트 형태에서 다시 Dataset 객체로 변경
+    test_dataset = Dataset.from_list(test_dataset_list)
+    test_dataset.save_to_disk("test_dataset")
+    print("test_dataset을 로컬에 저장함.")
 
 # 허깅페이스 모델 ID
 model_id = "Qwen/Qwen2-7B-Instruct" 
@@ -112,7 +124,7 @@ peft_config = LoraConfig(
     lora_dropout=0.1,
     r=8,
     bias="none",
-    target_modules=["q_proj", "v_proj"],
+    target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
     task_type="CAUSAL_LM",
 )
 
@@ -120,7 +132,7 @@ args = SFTConfig(
     output_dir="qwen2-7b-rag-ko",           # 저장될 디렉토리 및 저장소 ID
     num_train_epochs=3,                      # 에포크 수
     per_device_train_batch_size=2,           # GPU 당 배치 크기
-    gradient_accumulation_steps=2,           # 그래디언트 누적 스텝
+    gradient_accumulation_steps=4,           # 그래디언트 누적 스텝
     gradient_checkpointing=True,             # 메모리 절약 체크포인팅
     optim="adamw_torch_fused",               # 최적화기
     logging_steps=10,                        # 로그 주기
